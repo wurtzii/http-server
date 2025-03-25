@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
     "net"
+    "httpfromtcp/internal/request"
 )
 
 func main() {
@@ -22,12 +23,18 @@ func main() {
         if err != nil {
             log.Fatal(err)
         }
-        ch := getLinesChannel(conn)
-        
-        for s := range ch {
-            fmt.Printf("%s\n", s)
+        req, err := request.RequestFromReader(conn)
+        if err != nil {
+            log.Println(err)
+            break
         }
-        fmt.Println("connection closed")
+        
+        fmt.Printf(`
+            Request line:
+            - Method: %s
+            - Target: %s
+            - Version: %s
+        `, req.RequestLine.Method, req.RequestLine.RequestTarget, req.RequestLine.HttpVersion)
     }
 }
 
