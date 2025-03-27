@@ -2,7 +2,6 @@ package headers
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
     "strings"
 )
@@ -18,7 +17,9 @@ func NewHeaders() Headers {
 }
 
 func (h Headers) Parse(data []byte) (n int, done bool, err error) {
+    // fmt.Printf("checking '%s'\n", string(data))
     idx := bytes.Index(data, []byte(crlf))
+    
     if idx == -1 { 
         return 0, false, nil
     }
@@ -30,7 +31,7 @@ func (h Headers) Parse(data []byte) (n int, done bool, err error) {
     header := data[:idx]
     idx = bytes.Index(header, []byte(":"))
     if idx == -1 || idx == len(header) - 1 {
-        return 0, false, errors.New("invalid header syntax")
+        return 0, false, fmt.Errorf("invalid header syntax '%s'", header)
     }
 
     key := string(header[:idx])

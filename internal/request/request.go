@@ -6,12 +6,14 @@ import (
     "errors"
     "fmt"
     "bytes"
+    "httpfromtcp/internal/headers"
 )
 
 const (
     crlf = "\r\n"
-    initialized = 0
-    done = 1
+    requestStateInitialized = iota
+    requestStateParsingHeaders
+    requestStateDone
 )
 
 var (
@@ -20,6 +22,7 @@ var (
 
 type Request struct {
     RequestLine RequestLine
+    Headers     headers.Headers
     State       int 
 }
 
@@ -31,43 +34,93 @@ type RequestLine struct {
 
 func RequestFromReader(r io.Reader) (*Request, error) {
     req := &Request{
-        State:  initialized,
+        State:  requestStateInitialized,
+        Headers: headers.NewHeaders(),
     }
 
     bytesRead := 0
     bytesParsed := 0
     var buf []byte
-    for req.State != done {
+    for req.State !=  requestStateDone {
         // make sure we can always add at least 8 bytes of data to the buffer
         dat := make([]byte, 8) 
-        n, err := r.Read(dat)
+        n, rerr := r.Read(dat)
+
         buf = append(buf, dat[:n]...)
         bytesRead += n
 
-        n, err = req.Parse(buf)
+        n, err := req.Parse(buf)
+        bytesParsed += n
+        buf = buf[n:]
         if err != nil {
             return nil, err
         }
 
-        bytesParsed += n
+        if rerr != nil {
+            if errors.Is(rerr, io.EOF) {
+                if req.State != requestStateDone {
+                    return nil, fmt.Errorf("eof but parsing not complete")
+                }
+            } else {
+                return nil, err
+            }
+        }
     }
+
     return req, nil
 }
 
 func (r *Request) Parse(dat []byte) (int, error) {
     // we know were not done request line until found CRLF
-    n, reqline, err := ParseRequestLine(dat)
+    totalBytesParsed := 0
+    switch r.State {
+    case requestStateInitialized:
+        n, reqline, err := ParseRequestLine(dat)
+        if err != nil {
+            return 0, err
+        }
+
+        if n > 0 {
+            r.State = requestStateParsingHeaders 
+            r.RequestLine = *reqline
+        }
+        
+        totalBytesParsed += n
+
+    case requestStateParsingHeaders:
+        for {
+            n, done, err := r.Headers.Parse(dat[totalBytesParsed:])
+            totalBytesParsed += n
+            if err != nil {
+                return n, err
+            }
+            
+            if n == 0 { // not enough data available to parse
+                return totalBytesParsed, nil
+            }
+
+            if done { // headers are parsed
+                r.State = requestStateDone
+                break
+            }
+        }
+    }
+
+    return totalBytesParsed, nil 
+}
+
+func (r *Request) ParseSingleHeader(data []byte) (n int, err error) {
+    n, done, err := r.Headers.Parse(data)
+
     if err != nil {
         return 0, err
     }
 
-    if n > 0 {
-        r.State = done
-        r.RequestLine = *reqline
+    if done {
+        return n, nil
     }
 
-
-    return n, nil 
+    return n, nil;
 }
 
 
@@ -82,7 +135,7 @@ func ParseRequestLine(dat []byte) (int, *RequestLine, error) {
     if err != nil {
         return idx, nil, err
     }
-    return idx, reqline, nil
+    return idx + 2, reqline, nil
 }
 
 func RequestLineFromString(str string) (*RequestLine, error) {
